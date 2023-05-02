@@ -13,6 +13,7 @@
     "express": "^4.18.2",
     "nodemon": "^2.0.22",
     "pg": "^8.10.0",
+    "pg-connection-string": "^2.5.0",
     "pg-format": "^1.0.4"
   }
 }

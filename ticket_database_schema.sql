@@ -102,7 +102,7 @@ CREATE TABLE UserPayment(
 );
 
 CREATE TABLE Voucher(
-	voucher_id varchar(10) NOT NULL PRIMARY KEY,
+	voucher_id SERIAL NOT NULL PRIMARY KEY,
 	expire_date timestamp NOT NULL,
 	voucher_code varchar(10) NOT NULL,
 	event_id int NOT NULL,
@@ -123,7 +123,7 @@ CREATE TABLE Booking(
 	payment_info_id int NOT NULL,
 	event_id int NOT NULL,
 	quantity int NOT NULL,
-	voucher_id varchar(10),
+	voucher_id int,
 	CONSTRAINT fk_user
 		FOREIGN KEY(user_id)
 			REFERENCES users(user_id)
