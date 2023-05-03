@@ -1,7 +1,8 @@
 const express = require("express");
 const { Pool } = require("pg");
 const app = express();
-
+const cors = require('cors');
+const allowedOrigins = ['http://localhost:3000', 'https://example.com'];
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
 })
@@ -9,6 +10,18 @@ const pool = new Pool({
 const port = process.env.PORT || 3000
 
 app.use(express.json())
+app.use(cors({
+  origin: function(origin, callback){
+    // Check if origin is in allowedOrigins
+    if(!origin) return callback(null, true);
+    if(allowedOrigins.indexOf(origin) === -1){
+      const msg = 'The CORS policy for this site does not ' +
+                  'allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  }
+}));
 app.listen(port, ()=>{
     console.log("server is listening on port", port);
 })
@@ -204,9 +217,7 @@ app.get("/payment_info_id", (req, res)=>{
                 res.status(500).send("failed to search")
                 throw err1
                 }
-            else{
-                res.status(200).send(res1)
-            }
+                res.status(200).send(res1.rows)
         })
     }else{
         pool.query(`SELECT payment_info_id FROM paymentInfo 
@@ -373,7 +384,7 @@ app.post("/create_seat_type_no", (req, res)=>{
 
 app.post("/create_event_voucher", (req, res)=>{
     const {expire_date, voucher_code, event_id, amount, usage_limit} = req.body
-    pool.query("INSERT INTO Voucher(expired_date, voucher_code, event_id, amount, usage_limit) VALUES ($1, $2, $3, $4, $5)", [expire_date, voucher_code, event_id, amount, usage_limit], (err1, res1)=>{
+    pool.query("INSERT INTO Voucher(expire_date, voucher_code, event_id, amount, usage_limit) VALUES ($1, $2, $3, $4, $5)", [expire_date, voucher_code, event_id, amount, usage_limit], (err1, res1)=>{
         if(err1){
             console.error('error executing query err1: ', err1)
             res.status(500).send('Failed to create voucher')
@@ -407,7 +418,7 @@ app.get("/get_event_follower", (req, res)=>{
     })
 })
 
-app.get("/get_user_followed_event", async(req, res)=>{
+app.get("/get_user_followed_event", (req, res)=>{
     const {user_id} = req.query
     pool.query(`SELECT * FROM Event e JOIN FollowedEvent f ON e.event_id=f.event_id WHERE f.user_id=${user_id};`, (err1, res1)=>{
         if(err1){
@@ -418,3 +429,285 @@ app.get("/get_user_followed_event", async(req, res)=>{
         res.status(200).send(res1.rows)
     })
 })
+
+app.get("/get_available_seat", (req, res)=>{
+    const {event_id} = req.query
+    pool.query(`SELECT STN.seat_type_id, seat_row, seat_start, seat_end FROM SeatTypeNo STN JOIN SeatType ST ON STN.seat_type_id=ST.seat_type_id WHERE ST.event_id=${event_id}`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find seat type no')
+            return;
+        }
+        pool.query(`SELECT seat_type_id, seat_no FROM ETicket e JOIN Payment p ON e.booking_id=p.booking_id JOIN Booking b ON b.booking_id=p.booking_id WHERE b.event_id=${event_id}`, (err2, res2)=>{
+            if(err1){
+                console.error('error executing query err1: ', err1)
+                res.status(500).send('Failed to find bougth seat no')
+                return;
+            }
+            let seat_no = {}
+            res1.rows.forEach((row)=>{
+                seat_no[row.seat_type_id] = []
+                for(let i = row.seat_start; i<=row.seat_end; i++){
+                    seat_no[row.seat_type_id].push(`${row.seat_row}${i.toString().padStart(row.seat_end.toString().length, '0')}`)
+                }
+            })
+            // let unavailable_seat = res2.rows.map((obj)=>obj.seat_no)
+            let unavailable_seat = {}
+            for(let i = 0; i<res2.rowCount; i++){
+                const seat = res.rows[i]
+                if(!unavailable_seat[seat.seat_type_id]){
+                    unavailable_seat[seat.seat_type_id] = [];
+                }
+                unavailable_seat[seat.seat_type_id].push(seat.seat_no)
+            }
+            for(const key in unavailable_seat){
+                if(key in seat_no){
+                    for(const elem of unavailable_seat[key]){
+                        const index = seat_no[key].indexOf(elem)
+                        if(index !== -1){
+                            seat_no[key].splice(index, 1)
+                        }
+                    }
+                    if(seat_no[key].length === 0){
+                        delete seat_no[key]
+                    }
+                }
+            }
+            // let available_seat = seat_no.filter((value)=> !unavailable_seat.includes(value))
+            res.status(200).send({"available_seat": seat_no})
+            
+        })
+        
+    })
+})
+
+app.post("/create_booking", (req, res)=>{
+    const {user_id, payment_info_id, event_id, quantity, voucher_id, tickets} = req.body
+    const currentDate = new Date();
+    const year = currentDate.getFullYear();
+    const month = (currentDate.getMonth() + 1).toString().padStart(2, '0');
+    const day = currentDate.getDate().toString().padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+    let query = "INSERT INTO Booking(booking_date, user_id, payment_info_id, event_id, quantity"
+    let values = "VALUES ($1, $2, $3, $4, $5"
+    let format = [formattedDate, user_id, payment_info_id, event_id, quantity]
+    if(voucher_id !== undefined){
+        query += ", voucher_id"
+        values += ", $6"
+        format.push(voucher_id)
+    }
+    query += ") "+values+") RETURNING booking_id;"
+    
+    pool.query(query, format, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to create booking')
+            return;
+        }
+        let ticket_query = "INSERT INTO ETicket(booking_id, ticket_date, refundable, seat_no, seat_type_id)"
+        let ticket_value = " VALUES " + tickets.map((ticket)=>{
+            return `(${res1.rows[0].booking_id}, '${ticket.ticket_date}', '${ticket.refundable}', '${ticket.seat_no}', ${ticket.seat_type_id})`
+        }).join(', ') + ";"
+        pool.query(ticket_query+ticket_value, (err2, res2)=>{
+            if(err2){
+                console.error('error executing query err2: ', err2)
+                res.status(500).send('Failed to create booking ticket')
+                return;
+            }
+            res.status(200).send("Succesfully create booking"+res1.rows[0].booking_id)
+            
+        })
+    })
+    
+})
+
+app.get("/get_event", (req, res)=>{
+    const {event_name, event_type_id, categories_id} = req.query
+    let query = "SELECT * FROM Event"
+    if(categories_id !== undefined){
+        query = `SELECT e.* FROM Event e JOIN CategoriesView cv ON e.event_id=cv.event_id WHERE categories_id IN (${JSON.parse(categories_id).join(', ')})`
+        if(event_name !== undefined){
+            query += ` AND event_name LIKE '%${event_name}%'`
+        }
+        if(event_type_id !== undefined){
+            query += ` AND event_type_id=${event_type_id}`
+        }
+        query += ` GROUP BY e.event_id HAVING COUNT(DISTINCT cv.categories_id)=${JSON.parse(categories_id).length};`
+    }else{
+        if(event_name !== undefined && event_type_id !== undefined){
+            query += ` WHERE event_name LIKE '%${event_name}%' AND event_type_id=${event_type_id}`
+        }else{
+            if(event_name !== undefined){
+                query += ` WHERE event_name LIKE '%${event_name}%'`
+            }
+            if(event_type_id !== undefined){
+                query += ` WHERE event_type_id=${event_type_id}`
+            }
+        }
+        query += ";"
+    }
+    pool.query(query, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find event')
+            return;
+        }
+        pool.query(`SELECT cv.event_id, c.categories_name FROM CategoriesView cv JOIN Categories c ON c.categories_id=cv.categories_id WHERE cv.event_id IN (${res1.rows.map((row)=>row.event_id).join(', ')});`, (err2, res2)=>{
+            if(err2){
+                console.error('error executing query err2 ', err2)
+                res.status(500).send('Failed to find categories')
+                return;
+            }
+            const event_categories = res2.rows.reduce((acc, { event_id, categories_name }) => {
+            if (!acc[event_id]) {
+                acc[event_id] = [];
+            }
+            acc[event_id].push(categories_name);
+            return acc;
+            }, {});
+            res1.rows.forEach(item=>{
+                item.categories = event_categories[item.event_id] || []
+            })
+            res.status(200).send(res1.rows)
+        })
+    })
+})
+
+app.get("/get_user_organize", (req, res)=>{
+    const {user_id} = req.query
+    pool.query(`SELECT o.*, m.role FROM Organize o JOIN Member m ON o.organize_id=m.organize_id WHERE m.user_id=${user_id};`, (err1, res1)=>{
+        if(err1){
+            // console.log(query)
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to organization')
+            return;
+        }
+        res.status(200).send(res1.rows)
+    })
+})
+
+app.get("/validate_voucher", (req, res)=>{
+    const {voucher_code, event_id} = req.query
+    const currentDate = new Date();
+    const year = currentDate.getFullYear();
+    const month = (currentDate.getMonth() + 1).toString().padStart(2, '0');
+    const day = currentDate.getDate().toString().padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+
+    pool.query(`SELECT * FROM Voucher WHERE voucher_code='${voucher_code}';`, (err1, res1)=>{
+        if(err1){
+            console.log(`SELECT * FROM Voucher WHERE voucher_code='${voucher_code}';`)
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find voucher')
+            return;
+        }
+        if(res1.rows[0].status){
+            res.status(500).send({voucher_is_valid: false, info: 'This voucher already closed'})
+        }
+        if(res1.rowCount === 0 || res1.rows[0].event_id.toString() !== event_id){
+            res.status(500).send({voucher_is_valid: false, info: 'Not found this voucher code'})
+            return;
+        }
+        if(res1.rows[0].expire_date <= formattedDate ){
+            res.status(500).send({voucher_is_valid: false, info: 'This voucher already expired'})
+            return;
+        }
+        if(res1.rows[0].usage_limit <= 0){
+            res.status(500).send({voucher_is_valid: false, info: 'This voucher already reach the usage limit'})
+            return;
+        }
+        res.status(200).send({voucher_is_valid: true, info: 'Successfully find this voucher'})
+
+    })
+})
+// TO DO 
+// get event voucher
+app.get("/event_voucher", (req, res)=>{
+    const {event_id} = req.query
+    pool.query(`SELECT * FROM Voucher WHERE event_id=${event_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find voucher')
+            return;
+        }
+        res.status(200).send(res1.rows)
+    })
+})
+// get user booking
+app.get("/user_booking", (req, res)=>{
+    const {user_id} = req.query
+    pool.query(`SELECT * FROM Booking WHERE user_id=${user_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find voucher')
+            return;
+        }
+        if(res1.rowCount == 0){
+            res.status(200).send(res1.rows)
+        }else{
+            pool.query(`SELECT et.*, st.seat_type, st.price FROM ETicket et JOIN SeatType st ON et.seat_type_id=st.seat_type_id WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, (err2, res2)=>{ 
+                let booking_ticket = {}
+                res2.rows.forEach((row)=>{
+                    if(!booking_ticket[row.booking_id]){
+                        booking_ticket[row.booking_id] = []
+                    }
+                    booking_ticket[row.booking_id].push(row)
+                })
+                console.log(booking_ticket, `SELECT * FROM ETicket WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, res2.rows)
+                res1.rows.map((row)=>{
+                    row.total_price = 0
+                    booking_ticket[row.booking_id].forEach((ticket)=>{
+                        row.total_price += parseFloat(ticket.price)
+                    })
+                    row.ticket = booking_ticket[row.booking_id] 
+                })
+                res.status(200).send(res1.rows)
+            })
+        }
+    })
+})
+
+app.get("/event_type_name", (req, res)=>{
+    const { event_type_id } = req.query
+
+    pool.query(`SELECT * FROM EventType WHERE event_type_id=${event_type_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find event type name')
+            return;
+        }
+        res.status(200).send(res1.rows[0])
+
+    })
+})
+// get category name
+app.get("/category_name", (req, res)=>{
+    const {categories_id} = req.query
+    pool.query(`SELECT * FROM Categories WHERE categories_id IN (${JSON.parse(categories_id).join(', ')})`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find cateogories')
+            return;
+        }
+        res.status(200).send(res1.rows)
+    })
+})
+// get payment_info
+app.get("/payment_info", (req, res)=>{
+    const {payment_info_id} = req.query
+
+    pool.query(`SELECT * FROM paymentInfo WHERE payment_info_id=${payment_info_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to payment infomation')
+            return;
+        }
+        res.status(200).send(res1.rows[0])
+    })
+
+})
+
+// confirm payment
+// refund
+// get user ticket
+// get event type name
