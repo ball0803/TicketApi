@@ -8,6 +8,17 @@ const pool = new Pool({
 })
 
 const port = process.env.PORT || 3000
+const convertToBoolean = (value) => {
+  if (typeof value === 'string') {
+    const lowercasedValue = value.toLowerCase();
+    if (lowercasedValue === 'true' || lowercasedValue === '1') {
+      return true;
+    } else if (lowercasedValue === 'false' || lowercasedValue === '0') {
+      return false;
+    }
+  }
+  return Boolean(value);
+};
 
 app.use(express.json())
 app.use(cors({
@@ -56,7 +67,7 @@ app.get("/event_types", (req, res)=>{
 })
 app.post("/create_user", (req, res)=>{
     const {f_name, l_name, gender, email, tel, DOB} = req.body
-    pool.query(`INSERT INTO users( f_name, l_name, gender, email, tel, DOB) VALUES ('${f_name}','${l_name}','${gender}','${email}','${tel}', '${DOB}');`, (err, cres)=>{
+    pool.query(`INSERT INTO users( f_name, l_name, gender, email, tel, DOB) VALUES ('${f_name}','${l_name}','${gender}','${email}','${tel}', '${DOB}') RETURNING user_id;`, (err, cres)=>{
         if(err){
             res.status(500).send("failed to create user")
             throw err
@@ -137,8 +148,22 @@ app.get("/get_user_payment", (req, res)=>{
     })
 })
 app.get("/get_user",(req, res)=>{
-    const {email} = req.query
-    pool.query(`SELECT * FROM Users WHERE email LIKE '%${email}%';`, (err1, res1)=>{
+    const {email, exact} = req.query
+    let query = "SELECT * FROM Users"
+    if(email !== undefined){
+        if(exact !== undefined){
+            if(convertToBoolean(exact)){
+                query += ` WHERE email='${email}'`
+            }else{
+                query += ` WHERE email LIKE '%${email}%'`
+            }
+        }else{
+            query += ` WHERE email LIKE '%${email}%'`
+        }
+    }
+    query += ";"
+    // console.error(query)
+    pool.query(query, (err1, res1)=>{
         if(err1){
             console.error('Error executing query', err1)
             res.status(500).send('Failed to find user')
@@ -393,7 +418,17 @@ app.post("/create_event_voucher", (req, res)=>{
         res.status(200).send("Successfully create voucher")
     })
 })
-
+app.get("/check_follow_event", (req, res)=>{
+    const {user_id, event_id} = req.query
+    pool.query(`SELECT * FROM FollowedEvent WHERE event_id=${event_id} AND user_id=${user_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find follow event')
+            return;
+        }
+        res.status(200).send(res1.rowCount !== 0)
+    })
+})
 app.post("/follow_event", (req, res)=>{
     const {event_id, user_id} = req.body
     pool.query("INSERT INTO FollowedEvent(user_id, event_id) VALUES ($1, $2)", [user_id, event_id], (err1, res1)=>{
@@ -522,29 +557,33 @@ app.post("/create_booking", (req, res)=>{
 })
 
 app.get("/get_event", (req, res)=>{
-    const {event_name, event_type_id, categories_id} = req.query
+    const {event_id, event_name, event_type_id, categories_id} = req.query
     let query = "SELECT * FROM Event"
-    if(categories_id !== undefined){
-        query = `SELECT e.* FROM Event e JOIN CategoriesView cv ON e.event_id=cv.event_id WHERE categories_id IN (${JSON.parse(categories_id).join(', ')})`
-        if(event_name !== undefined){
-            query += ` AND event_name LIKE '%${event_name}%'`
-        }
-        if(event_type_id !== undefined){
-            query += ` AND event_type_id=${event_type_id}`
-        }
-        query += ` GROUP BY e.event_id HAVING COUNT(DISTINCT cv.categories_id)=${JSON.parse(categories_id).length};`
+    if(event_id !== undefined){
+        query += ` WHERE event_id=${event_id}`
     }else{
-        if(event_name !== undefined && event_type_id !== undefined){
-            query += ` WHERE event_name LIKE '%${event_name}%' AND event_type_id=${event_type_id}`
-        }else{
+        if(categories_id !== undefined){
+            query = `SELECT e.* FROM Event e JOIN CategoriesView cv ON e.event_id=cv.event_id WHERE categories_id IN (${JSON.parse(categories_id).join(', ')})`
             if(event_name !== undefined){
-                query += ` WHERE event_name LIKE '%${event_name}%'`
+                query += ` AND event_name LIKE '%${event_name}%'`
             }
             if(event_type_id !== undefined){
-                query += ` WHERE event_type_id=${event_type_id}`
+                query += ` AND event_type_id=${event_type_id}`
             }
+            query += ` GROUP BY e.event_id HAVING COUNT(DISTINCT cv.categories_id)=${JSON.parse(categories_id).length};`
+        }else{
+            if(event_name !== undefined && event_type_id !== undefined){
+                query += ` WHERE event_name LIKE '%${event_name}%' AND event_type_id=${event_type_id}`
+            }else{
+                if(event_name !== undefined){
+                    query += ` WHERE event_name LIKE '%${event_name}%'`
+                }
+                if(event_type_id !== undefined){
+                    query += ` WHERE event_type_id=${event_type_id}`
+                }
+            }
+            query += ";"
         }
-        query += ";"
     }
     pool.query(query, (err1, res1)=>{
         if(err1){
@@ -667,6 +706,7 @@ app.get("/user_booking", (req, res)=>{
     })
 })
 
+// get event type name
 app.get("/event_type_name", (req, res)=>{
     const { event_type_id } = req.query
 
@@ -708,6 +748,33 @@ app.get("/payment_info", (req, res)=>{
 })
 
 // confirm payment
+app.post("/confirm_payment", (req, res)=>{
+    const {payment_info_id, amount, booking_id} = req.body
+    const currentDate = new Date();
+    const year = currentDate.getFullYear();
+    const month = (currentDate.getMonth() + 1).toString().padStart(2, '0');
+    const day = currentDate.getDate().toString().padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+
+    pool.query(`INSERT INTO Payment(payment_info_id, payment_date, amount, booking_id) VALUES ($1, $2, $3, $4);`, [payment_info_id, formattedDate, amount, booking_id], (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed transaction')
+            return;
+        }
+        res.status(200).send("Succesfully made transaction")
+    })
+})
 // refund
 // get user ticket
-// get event type name
+app.get("/user_ticket", (req, res)=>{
+    const {user_id} = req.query
+    pool.query(`SELECT et.*, st.event_id, st.price, st.seat_type FROM ETicket et JOIN Booking b ON et.booking_id=b.booking_id JOIN Payment p ON p.booking_id=b.booking_id JOIN SeatType st ON et.seat_type_id=st.seat_type_id WHERE b.user_id=${user_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find user ticket')
+            return;
+        }
+        res.status(200).send(res1.rows)
+    })
+})
