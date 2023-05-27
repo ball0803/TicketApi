@@ -77,64 +77,53 @@ app.post("/create_user", (req, res)=>{
 })
 
 app.post("/create_user_payment", (req, res)=>{
-    const {user_id, card_id, payment_name, payment_method, promp_pay, expired_date} = req.body
-    pool.query(
-        `INSERT INTO paymentInfo(card_id, payment_name, payment_method, promp_pay, expired_date) VALUES ($1, $2, $3, $4, $5) RETURNING payment_info_id`,
-        [card_id, payment_name, payment_method, promp_pay, expired_date],
-        (err, result) => {
-        if (err) {
-            console.error('Error executing query', err);
-            res.status(500).send('Failed to create payment information');
+    const {user_id, card_id, payment_name, payment_method, prompt_pay, expired_date} = req.body
+    let query = "SELECT * FROM paymentInfo pi JOIN UserPayment up ON pi.payment_info_id=up.payment_info_id"
+    if(payment_method == "Credit Card"){
+        query += ` WHERE up.user_id=${user_id} AND pi.card_id='${card_id}';`
+    }
+    if(payment_method == "Prompt Pay"){
+        query += ` WHERE up.user_id=${user_id} AND pi.prompt_pay='${prompt_pay}';`
+    }
+    console.log(query)
+    pool.query(query, (err1, res1)=>{
+        if (err1) {
+            console.error('Error executing query ', err1);
+            res.status(500).send('Failed to find payment information');
             return;
         }
-
-        const paymentInfoId = result.rows[0].payment_info_id;
-
-        if (card_id) {
+        if(res1.rowCount > 0){
+            res.status(201).send('Payment already exist')
+        }else{
             pool.query(
-            `INSERT INTO UserPayment(payment_info_id, user_id) VALUES ($1, $2)`,
-            [paymentInfoId, user_id],
-            (err) => {
-                if (err) {
-                console.error('Error executing query', err);
-                res.status(500).send('Failed to connect user payment');
-                return;
-                }
-
-                res.status(200).send('Successfully create user payment');
-            }
-            );
-        } else {
-            pool.query(
-            `SELECT payment_info_id FROM paymentInfo WHERE payment_name=$1`,
-            [payment_name],
-            (err, result) => {
-                if (err) {
-                console.error('Error executing query', err);
-                res.status(500).send('Failed to fetch payment information');
-                return;
-                }
-
-                const paymentInfoId = result.rows[0].payment_info_id;
-
-                pool.query(
-                `INSERT INTO UserPayment(payment_info_id, user_id) VALUES ($1, $2)`,
-                [paymentInfoId, user_id],
-                (err) => {
+                `INSERT INTO paymentInfo(card_id, payment_name, payment_method, prompt_pay, expired_date) VALUES ($1, $2, $3, $4, $5) RETURNING payment_info_id`,
+                [card_id, payment_name, payment_method, prompt_pay, expired_date],
+                (err, result) => {
                     if (err) {
-                    console.error('Error executing query', err);
-                    res.status(500).send('Failed to connect user payment');
-                    return;
+                        console.error('Error executing query', err);
+                        res.status(500).send('Failed to create payment information');
+                        return;
                     }
-
-                    res.status(200).send('Successfully create user payment');
-                }
+            
+                    const paymentInfoId = result.rows[0].payment_info_id;
+            
+                    pool.query(
+                    `INSERT INTO UserPayment(payment_info_id, user_id) VALUES ($1, $2)`,
+                    [paymentInfoId, user_id],
+                    (err) => {
+                        if (err) {
+                        console.error('Error executing query', err);
+                        res.status(500).send('Failed to connect user payment');
+                        return;
+                        }
+        
+                        res.status(200).send('Successfully create user payment');
+                    }
                 );
-            }
+                }
             );
         }
-        }
-    );
+    })
 })
 app.get("/get_user_payment", (req, res)=>{
     const {user_id} = req.query
@@ -196,40 +185,69 @@ app.get("/get_member", (req, res)=>{
     })
 })
 app.post("/create_organize", (req, res)=>{
-    const {user_id, name, tel, website} = req.body
-    pool.query(`SELECT payment_info_id FROM UserPayment WHERE user_id=${user_id}`, (err1, res1)=>{
-        if(err1){
-            console.error('Error executing query', err1)
-            res.status(500).send('Failed to find user payment')
-            return;
-        }
-        let query = `INSERT INTO Organize(name, payment_info_id`
-        let values = `VALUES ('${name}', ${res1.rows[0].payment_info_id}`
-        if(tel !== undefined){
-            query += ', tel'
-            values += `, '${tel}'`
-        }
-        if(website !== undefined){
-            query += ', website'
-            values += `, '${website}'`
-        }
-        query += ')'+values+') RETURNING organize_id;'
-        pool.query(query, (err2, res2)=>{
-            if(err2){
-                console.error('Error executing query', err2)
-                res.status(500).send('Failed to create organize')
-                return;
+    const {user_id, name, tel, website, payment_info_id} = req.body
+    if(payment_info_id !== undefined){
+            let query = `INSERT INTO Organize(name, payment_info_id`
+            let values = `VALUES ('${name}', ${payment_info_id}`
+            if(tel !== undefined){
+                query += ', tel'
+                values += `, '${tel}'`
             }
-            pool.query(`INSERT INTO Member(organize_id, user_id, role) VALUES ($1, $2, $3)`, [res2.rows[0].organize_id, user_id, 'Owner'], (err3, res3)=>{
-                if(err3){
-                    console.error('Error executing query', err3)
-                    res.status(500).send('Failed to create member')
+            if(website !== undefined){
+                query += ', website'
+                values += `, '${website}'`
+            }
+            query += ')'+values+') RETURNING organize_id;'
+            pool.query(query, (err2, res2)=>{
+                if(err2){
+                    console.error('Error executing query', err2)
+                    res.status(500).send('Failed to create organize')
                     return;
                 }
-                res.status(200).send(`Successfully created orgainze`);
+                pool.query(`INSERT INTO Member(organize_id, user_id, role) VALUES ($1, $2, $3)`, [res2.rows[0].organize_id, user_id, 'Owner'], (err3, res3)=>{
+                    if(err3){
+                        console.error('Error executing query', err3)
+                        res.status(500).send('Failed to create member')
+                        return;
+                    }
+                    res.status(200).send(`Successfully created orgainze`);
+                })
+            })
+    }else{
+        pool.query(`SELECT payment_info_id FROM UserPayment WHERE user_id=${user_id}`, (err1, res1)=>{
+            if(err1){
+                console.error('Error executing query', err1)
+                res.status(500).send('Failed to find user payment')
+                return;
+            }
+            let query = `INSERT INTO Organize(name, payment_info_id`
+            let values = `VALUES ('${name}', ${res1.rows[0].payment_info_id}`
+            if(tel !== undefined){
+                query += ', tel'
+                values += `, '${tel}'`
+            }
+            if(website !== undefined){
+                query += ', website'
+                values += `, '${website}'`
+            }
+            query += ')'+values+') RETURNING organize_id;'
+            pool.query(query, (err2, res2)=>{
+                if(err2){
+                    console.error('Error executing query', err2)
+                    res.status(500).send('Failed to create organize')
+                    return;
+                }
+                pool.query(`INSERT INTO Member(organize_id, user_id, role) VALUES ($1, $2, $3)`, [res2.rows[0].organize_id, user_id, 'Owner'], (err3, res3)=>{
+                    if(err3){
+                        console.error('Error executing query', err3)
+                        res.status(500).send('Failed to create member')
+                        return;
+                    }
+                    res.status(200).send(`Successfully created orgainze`);
+                })
             })
         })
-    })
+    }
 })
 
 
@@ -273,11 +291,6 @@ app.post("/createorganize", (req, res)=>{
 
 app.post("/create_event", (req, res)=>{
     const {categories_id, organize_id, event_name, event_startdate, event_enddate, location, email, tel, website, event_description, poster, event_type_id, payment_info_id} = req.body
-    if(err){
-        console.error('Error connecting to database', err);
-        res.status(500).send('Failed to connect to database');
-        return;
-    }
     let query = 'INSERT INTO Event(organize_id, event_name, event_startdate, event_enddate, location, event_type_id, event_description'
     let values = `VALUES (${organize_id}, '${event_name}', '${event_startdate}', '${event_enddate}', '${location}', ${event_type_id}, '${event_description}'`
     if(email !== undefined){
@@ -441,6 +454,18 @@ app.post("/follow_event", (req, res)=>{
     })
 })
 
+app.delete("/follow_event", (req, res)=>{
+    const {event_id, user_id} = req.query
+    pool.query(`DELETE FROM FollowedEvent WHERE user_id=${user_id} AND event_id=${event_id}`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to unfollow event')
+            return;
+        }
+        res.status(200).send("Successfully unfollow event")
+    })
+})
+
 app.get("/get_event_follower", (req, res)=>{
     const {event_id} = req.query
     pool.query(`SELECT COUNT(*) AS Number_of_follower FROM FollowedEvent WHERE event_id=${event_id};`, (err1, res1)=>{
@@ -474,27 +499,31 @@ app.get("/get_available_seat", (req, res)=>{
             return;
         }
         pool.query(`SELECT seat_type_id, seat_no FROM ETicket e JOIN Payment p ON e.booking_id=p.booking_id JOIN Booking b ON b.booking_id=p.booking_id WHERE b.event_id=${event_id}`, (err2, res2)=>{
-            if(err1){
-                console.error('error executing query err1: ', err1)
+            if(err2){
+                console.error('error executing query err2: ', err2)
                 res.status(500).send('Failed to find bougth seat no')
                 return;
             }
             let seat_no = {}
             res1.rows.forEach((row)=>{
-                seat_no[row.seat_type_id] = []
+                if(!seat_no[row.seat_type_id]){
+                    seat_no[row.seat_type_id] = []
+                }
                 for(let i = row.seat_start; i<=row.seat_end; i++){
                     seat_no[row.seat_type_id].push(`${row.seat_row}${i.toString().padStart(row.seat_end.toString().length, '0')}`)
                 }
             })
+            // console.log(seat_no, res1, res2)
             // let unavailable_seat = res2.rows.map((obj)=>obj.seat_no)
             let unavailable_seat = {}
             for(let i = 0; i<res2.rowCount; i++){
-                const seat = res.rows[i]
+                const seat = res2.rows[i]
                 if(!unavailable_seat[seat.seat_type_id]){
                     unavailable_seat[seat.seat_type_id] = [];
                 }
                 unavailable_seat[seat.seat_type_id].push(seat.seat_no)
             }
+            // console.log(seat_no, unavailable_seat)
             for(const key in unavailable_seat){
                 if(key in seat_no){
                     for(const elem of unavailable_seat[key]){
@@ -558,57 +587,61 @@ app.post("/create_booking", (req, res)=>{
 
 app.get("/get_event", (req, res)=>{
     const {event_id, event_name, event_type_id, categories_id} = req.query
-    let query = "SELECT * FROM Event"
+    let query = "SELECT e.*, COUNT(*) AS follower FROM Event e LEFT JOIN FollowedEvent fe ON fe.event_id=e.event_id"
+    let value = []
     if(event_id !== undefined){
-        query += ` WHERE event_id=${event_id}`
-    }else{
-        if(categories_id !== undefined){
-            query = `SELECT e.* FROM Event e JOIN CategoriesView cv ON e.event_id=cv.event_id WHERE categories_id IN (${JSON.parse(categories_id).join(', ')})`
-            if(event_name !== undefined){
-                query += ` AND event_name LIKE '%${event_name}%'`
-            }
-            if(event_type_id !== undefined){
-                query += ` AND event_type_id=${event_type_id}`
-            }
-            query += ` GROUP BY e.event_id HAVING COUNT(DISTINCT cv.categories_id)=${JSON.parse(categories_id).length};`
-        }else{
-            if(event_name !== undefined && event_type_id !== undefined){
-                query += ` WHERE event_name LIKE '%${event_name}%' AND event_type_id=${event_type_id}`
-            }else{
-                if(event_name !== undefined){
-                    query += ` WHERE event_name LIKE '%${event_name}%'`
-                }
-                if(event_type_id !== undefined){
-                    query += ` WHERE event_type_id=${event_type_id}`
-                }
-            }
-            query += ";"
-        }
+        value.push(`e.event_id=${event_id}`)
     }
+    if(event_name !== undefined){
+        value.push(`event_name LIKE '%${event_name}%'`)
+    }
+    if(event_type_id !== undefined){
+        value.push(`event_type_id=${event_type_id}`)
+    }
+    if(categories_id !== undefined){
+        query += ' JOIN CategoriesView cv ON e.event_id=cv.event_id'
+        value.push(`categories_id IN (${JSON.parse(categories_id).join(', ')})`)
+    }
+    if(value.length !== 0){
+        query = query +" WHERE " + value.join(" AND ") + " GROUP BY e.event_id"
+    }else{
+        query = query + " GROUP BY e.event_id"
+    }
+
+    if(categories_id !== undefined){
+        query += ` HAVING COUNT(DISTINCT cv.categories_id)=${JSON.parse(categories_id).length};`
+    }else{
+        query += ";"
+    }
+    console.log(query)
     pool.query(query, (err1, res1)=>{
         if(err1){
             console.error('error executing query err1: ', err1)
             res.status(500).send('Failed to find event')
             return;
         }
-        pool.query(`SELECT cv.event_id, c.categories_name FROM CategoriesView cv JOIN Categories c ON c.categories_id=cv.categories_id WHERE cv.event_id IN (${res1.rows.map((row)=>row.event_id).join(', ')});`, (err2, res2)=>{
-            if(err2){
-                console.error('error executing query err2 ', err2)
-                res.status(500).send('Failed to find categories')
-                return;
-            }
-            const event_categories = res2.rows.reduce((acc, { event_id, categories_name }) => {
-            if (!acc[event_id]) {
-                acc[event_id] = [];
-            }
-            acc[event_id].push(categories_name);
-            return acc;
-            }, {});
-            res1.rows.forEach(item=>{
-                item.categories = event_categories[item.event_id] || []
+        if(res1.rowCount > 0){
+            pool.query(`SELECT cv.event_id, c.categories_name FROM CategoriesView cv JOIN Categories c ON c.categories_id=cv.categories_id WHERE cv.event_id IN (${res1.rows.map((row)=>row.event_id).join(', ')});`, (err2, res2)=>{
+                if(err2){
+                    console.error('error executing query err2 ', err2)
+                    res.status(500).send('Failed to find categories')
+                    return;
+                }
+                const event_categories = res2.rows.reduce((acc, { event_id, categories_name }) => {
+                if (!acc[event_id]) {
+                    acc[event_id] = [];
+                }
+                acc[event_id].push(categories_name);
+                return acc;
+                }, {});
+                res1.rows.forEach(item=>{
+                    item.categories = event_categories[item.event_id] || []
+                })
+                res.status(200).send(res1.rows)
             })
+        }else{
             res.status(200).send(res1.rows)
-        })
+        }
     })
 })
 
