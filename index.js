@@ -43,7 +43,7 @@ app.get('/', (req, res) => {
 })
 app.get("/ping", (req, res)=>{
     pool.query('SELECT $1::text as message', ['Hello world!'], (err1, res1)=>{
-        console.log(res1.rows[0].message) // Hello world!
+        // console.log(res1.rows[0].message) // Hello world!
         res.status(200).send({info: "Hello World!"})
     })
 })
@@ -67,7 +67,7 @@ app.get("/event_types", (req, res)=>{
 })
 app.post("/create_user", (req, res)=>{
     const {f_name, l_name, gender, email, tel, DOB} = req.body
-    pool.query(`INSERT INTO users( f_name, l_name, gender, email, tel, DOB) VALUES ('${f_name}','${l_name}','${gender}','${email}','${tel}', '${DOB}') RETURNING user_id;`, (err, cres)=>{
+    pool.query(`INSERT INTO users( f_name, l_name, gender, email, tel, DOB, user_role) VALUES ('${f_name}','${l_name}','${gender}','${email}','${tel}', '${DOB}', 'User') RETURNING user_id;`, (err, cres)=>{
         if(err){
             res.status(500).send("failed to create user")
             throw err
@@ -75,6 +75,73 @@ app.post("/create_user", (req, res)=>{
         res.status(200).send("Succesfully create user")
     })
 })
+
+app.put("/update_user_role/:user_id", (req, res) => {
+  const { user_id } = req.params;
+  const { user_role } = req.body;
+
+  pool.query(
+    `UPDATE Users SET user_role='${user_role}' WHERE user_id=${user_id}`,
+    (err, result) => {
+      if (err) {
+        console.error('Error executing query', err);
+        res.status(500).send('Failed to update user role');
+        return;
+      }
+
+      if (result.rowCount === 0) {
+        res.status(404).send('User not found');
+        return;
+      }
+
+      res.status(200).send(`Successfully updated user role to ${user_role}`);
+    }
+  );
+});
+
+app.put("/update_user/:user_id", (req, res) => {
+  const userId = req.params.user_id;
+  const { f_name, l_name, gender, email, tel, DOB } = req.body;
+  const updateFields = [];
+  if (f_name) {
+    updateFields.push(`f_name = '${f_name}'`);
+  }
+  if (l_name) {
+    updateFields.push(`l_name = '${l_name}'`);
+  }
+  if (gender) {
+    updateFields.push(`gender = '${gender}'`);
+  }
+  if (email) {
+    updateFields.push(`email = '${email}'`);
+  }
+  if (tel) {
+    updateFields.push(`tel = '${tel}'`);
+  }
+  if (DOB) {
+    updateFields.push(`DOB = '${DOB}'`);
+  }
+
+  if (updateFields.length === 0) {
+    res.status(400).send("No fields to update");
+    return;
+  }
+
+  const updateQuery = `UPDATE users SET ${updateFields.join(", ")} WHERE user_id = '${userId}'`;
+
+  pool.query(updateQuery, (err, result) => {
+    if (err) {
+      res.status(500).send("Failed to update user");
+      throw err;
+    }
+
+    if (result.rowCount === 0) {
+      res.status(404).send("User not found");
+    } else {
+      res.status(200).send("Successfully updated user");
+    }
+  });
+});
 
 app.post("/create_user_payment", (req, res)=>{
     const {user_id, card_id, payment_name, payment_method, prompt_pay, expired_date} = req.body
@@ -85,7 +152,7 @@ app.post("/create_user_payment", (req, res)=>{
     if(payment_method == "Prompt Pay"){
         query += ` WHERE up.user_id=${user_id} AND pi.prompt_pay='${prompt_pay}';`
     }
-    console.log(query)
+    // console.log(query)
     pool.query(query, (err1, res1)=>{
         if (err1) {
             console.error('Error executing query ', err1);
@@ -125,6 +192,21 @@ app.post("/create_user_payment", (req, res)=>{
         }
     })
 })
+
+app.delete("/delete_user_payment", (req, res)=>{
+    const {payment_info_id} = req.query
+    pool.query(`DELETE FROM paymentInfo WHERE payment_info_id=${payment_info_id};`, 
+        (err1, res1)=>{
+            if (err1) {
+                console.error('Error executing query err1', err1);
+                res.status(500).send('Fail to Delete payment information');
+                return;
+            }
+            res.status(200).send('Sucessfully delete payment information')
+        }
+    )
+})
+
 app.get("/get_user_payment", (req, res)=>{
     const {user_id} = req.query
     pool.query(`SELECT * FROM PaymentInfo p JOIN UserPayment u ON p.payment_info_id=u.payment_info_id WHERE user_id=${user_id}`, (err1, res1)=>{
@@ -164,18 +246,52 @@ app.get("/get_user",(req, res)=>{
 })
 app.post("/add_member", (req, res)=>{
     const {user_id, organize_id} = req.body
-    pool.query(`INSERT INTO Member(organize_id, user_id, role) VALUES ($1, $2, $3)`, [organize_id, user_id, 'Manager'], (err1, res1)=>{
+    pool.query(`SELECT * FROM Member WHERE user_id=${user_id} AND organize_id=${organize_id};`, (err1, res1)=>{
         if(err1){
             console.error('Error executing query', err1)
-            res.status(500).send('Failed to add member')
+            res.status(500).send('Failed to find member')
             return;
         }
-        res.status(200).send('Succesfully add member')
+        if(res1.rowCount > 0){
+            res.status(500).send('Failed to add this member already exist')
+            return;
+        }
+        pool.query(`INSERT INTO Member(organize_id, user_id, role) VALUES ($1, $2, $3)`, [organize_id, user_id, 'Manager'], (err2, res2)=>{
+            if(err2){
+                console.error('Error executing query', err2)
+                res.status(500).send('Failed to add member')
+                return;
+            }
+            res.status(200).send('Succesfully add member')
+        })
     })
 })
+
+app.delete("/delete_member", (req, res) => {
+  const { user_id, organize_id } = req.query;
+  pool.query(
+    `DELETE FROM Member WHERE user_id = $1 AND organize_id = $2`,
+    [user_id, organize_id],
+    (err, result) => {
+      if (err) {
+        console.error('Error executing query', err);
+        res.status(500).send('Failed to delete member');
+        return;
+      }
+
+      if (result.rowCount === 0) {
+        res.status(404).send('Member not found');
+        return;
+      }
+
+      res.status(200).send('Successfully deleted member');
+    }
+  );
+});
+
 app.get("/get_member", (req, res)=>{
-    const {organize_id} = req.body
-    pool.query(`SELECT * FROM User u JOIN Member m ON u.organize_id = m.organize_id WHERE m.organize_id = ${organize_id};`, (err1, res1)=>{
+    const {organize_id} = req.query
+    pool.query(`SELECT * FROM Users u JOIN Member m ON u.user_id= m.user_id WHERE m.organize_id=${organize_id};`, (err1, res1)=>{
         if(err1){
             console.error('Error executing query', err1)
             res.status(500).send('Failed to find member')
@@ -613,7 +729,7 @@ app.get("/get_event", (req, res)=>{
     }else{
         query += ";"
     }
-    console.log(query)
+    // console.log(query)
     pool.query(query, (err1, res1)=>{
         if(err1){
             console.error('error executing query err1: ', err1)
@@ -668,7 +784,7 @@ app.get("/validate_voucher", (req, res)=>{
 
     pool.query(`SELECT * FROM Voucher WHERE voucher_code='${voucher_code}';`, (err1, res1)=>{
         if(err1){
-            console.log(`SELECT * FROM Voucher WHERE voucher_code='${voucher_code}';`)
+            // console.log(`SELECT * FROM Voucher WHERE voucher_code='${voucher_code}';`)
             console.error('error executing query err1: ', err1)
             res.status(500).send('Failed to find voucher')
             return;
@@ -725,7 +841,7 @@ app.get("/user_booking", (req, res)=>{
                     }
                     booking_ticket[row.booking_id].push(row)
                 })
-                console.log(booking_ticket, `SELECT * FROM ETicket WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, res2.rows)
+                // console.log(booking_ticket, `SELECT * FROM ETicket WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, res2.rows)
                 res1.rows.map((row)=>{
                     row.total_price = 0
                     booking_ticket[row.booking_id].forEach((ticket)=>{
@@ -809,5 +925,187 @@ app.get("/user_ticket", (req, res)=>{
             return;
         }
         res.status(200).send(res1.rows)
+    })
+})
+
+app.get("/event_transaction", (req, res)=>{
+    const {event_id} = req.query
+    pool.query(
+        `SELECT u.f_name, u.l_name, s.price, p.payment_date, e.isRefund 
+        FROM Users u 
+        JOIN Booking b ON u.user_id=b.user_id 
+        JOIN Eticket e ON b.booking_id=e.booking_id
+        JOIN Payment p ON p.booking_id=b.booking_id
+        JOIN SeatType s ON s.seat_type_id=e.seat_type_id
+        WHERE b.event_id=${event_id};
+        `,
+        (err1, res1)=>{
+            if(err1){
+                console.error('error executing query err1: ', err1)
+                res.status(500).send('Failed to find transaction')
+                return;
+            }
+            res.status(200).send(res1.rows)
+    })
+})
+
+app.get("/event_age_distribute", (req, res)=>{
+    const {event_id} = req.query
+    const calculateAge = (dateOfBirth) => {
+    const today = new Date();
+    const dob = new Date(dateOfBirth);
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) {
+        age--;
+    }
+    return age;
+    };
+    pool.query(
+        `SELECT DISTINCT u.user_id, u.dob  
+        FROM Users u 
+        JOIN Booking b ON u.user_id=b.user_id 
+        JOIN Payment p ON p.booking_id=b.booking_id
+        WHERE b.event_id=${event_id}
+        `,
+        (err1, res1)=>{
+            if(err1){
+                console.error('error executing query err1: ', err1)
+                res.status(500).send('Failed to find user')
+                return;
+            }
+
+            const ageFrequencies = {};
+
+            res1.rows.forEach((user) => {
+                const age = calculateAge(user.dob);
+                if (age in ageFrequencies) {
+                    ageFrequencies[age]++;
+                } else {
+                    ageFrequencies[age] = 1;
+                }
+            });
+
+            const ageFrequencyArray = Object.entries(ageFrequencies).map(([age, frequency]) => ({
+                age: parseInt(age),
+                frequency,
+            }));
+
+            res.status(200).send(ageFrequencyArray)
+        })
+})
+
+app.get("/event_gender_distribute", (req, res)=>{
+    const { event_id } = req.query
+    pool.query(
+        `SELECT u.gender, COUNT(DISTINCT u.user_id) AS gender_count
+        FROM Users u
+        JOIN Booking b ON u.user_id = b.user_id
+        JOIN Payment p ON p.booking_id = b.booking_id
+        WHERE b.event_id = ${event_id}
+        GROUP BY u.gender;
+        `, (err1, res1)=>{
+            if(err1){
+                console.error('error executing query err1: ', err1)
+                res.status(500).send('Failed to find user')
+                return;
+            }
+            res.status(200).send(res1.rows)
+        }
+    )
+})
+
+app.get("/get_event_sale", (req, res)=>{
+    pool.query(`
+        SELECT e.*, 
+        SUM(CASE WHEN et.isRefund = true THEN s.price ELSE 0 END) AS total_refund,
+        SUM(CASE WHEN et.isRefund = false THEN s.price ELSE 0 END) AS total_sale
+        FROM Event e
+        JOIN Booking b ON e.event_id = b.event_id
+        JOIN Eticket et ON b.booking_id = et.booking_id
+        JOIN Payment p ON p.booking_id = b.booking_id
+        JOIN SeatType s ON s.seat_type_id = et.seat_type_id
+        GROUP BY e.event_id;
+    `,(err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find event')
+            return;
+        }
+        res.status(200).send(res1.rows)
+    })
+})
+
+app.put("/use_ticket/:ticket_id", (req, res)=>{
+    const {ticket_id} = req.params
+    const currentDate = new Date();
+
+    // console.log(`SELECT * FROM ETicket WHERE ticket_id=${ticket_id};`)
+    pool.query(`SELECT * FROM ETicket WHERE ticket_id=${ticket_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find ticket')
+            return;
+        }
+        if(res1.rowCount === 0){
+            res.status(404).send('Ticket Not Founded')
+            return;
+        }
+        if(new Date(res1.rows[0].ticket_date) > currentDate ){
+            res.status(403).send('The ticket date has expired. Cannot proceed with the ticket.')
+            return;
+        }
+        if(res1.rows[0].isrefund){
+            res.status(403).send('The ticket is already refunded. Cannot proceed with the ticket.')
+            return;
+        }
+        if(res1.rows[0].ischeckin){
+            res.status(403).send('The ticket is already used. Cannot proceed with the ticket.')
+            return;
+        }
+        pool.query(`UPDATE Eticket SET isCheckIn=True WHERE ticket_id=${ticket_id};`, (err2, res2)=>{
+            if(err2){
+                console.error('error executing query err1: ', err2)
+                res.status(500).send('Failed to find ticket')
+                return;
+            }
+            res.status(200).send('Successfully use ticket')
+        })
+    })
+})
+
+app.put("/refund_ticket/:ticket_id", (req, res)=>{
+    const { ticket_id } = req.params
+    // console.log(`SELECT * FROM ETicket WHERE ticket_id=${ticket_id};`)
+    pool.query(`SELECT * FROM ETicket WHERE ticket_id=${ticket_id};`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find ticket')
+            return;
+        }
+        if(res1.rowCount === 0){
+            res.status(404).send('Ticket Not Founded')
+            return;
+        }
+        if(res1.rows[0].ischeckIn){
+            res.status(403).send('The ticket is already used. Cannot refund the ticket.')
+            return;
+        }
+        if(res1.rows[0].isrefund){
+            res.status(403).send('The ticket is already refunded. Cannot refund the ticket.')
+            return;
+        }
+        if(!res1.rows[0].refundable){
+            res.status(403).send("The ticket isn't refundable. Cannot refund the ticket.")
+            return;
+        }
+        pool.query(`UPDATE Eticket SET isRefund=True WHERE ticket_id=${ticket_id};`, (err2, res2)=>{
+            if(err2){
+                console.error('error executing query err1: ', err2)
+                res.status(500).send('Failed to find ticket')
+                return;
+            }
+            res.status(200).send('Successfully refund ticket')
+        })
     })
 })

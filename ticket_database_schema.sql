@@ -1,5 +1,4 @@
 CREATE DATABASE Ticket_Database;
-
 CREATE TABLE Users(
 	user_id SERIAL NOT NULL PRIMARY KEY,
 	f_name varchar(100) NOT NULL,
@@ -7,7 +6,8 @@ CREATE TABLE Users(
 	gender varchar(10) NOT NULL,
 	email varchar(30) NOT NULL,
 	tel varchar(10) NOT NULL,
-	DOB timestamp NOT NULL
+	DOB timestamp NOT NULL,
+	user_role varchar(20) NOT NULL
 );
 
 CREATE TABLE PaymentInfo(
@@ -20,20 +20,25 @@ CREATE TABLE PaymentInfo(
 );
 
 CREATE TABLE Event (
-  event_id SERIAL NOT NULL PRIMARY KEY,
-  organize_id int NOT NULL,
-  event_name varchar(100) NOT NULL,
-  event_startdate timestamp NOT NULL,
-  event_enddate timestamp NOT NULL,
-  location varchar(100) NOT NULL,
-  email varchar(30) DEFAULT NULL,
-  tel varchar(10) DEFAULT NULL,
-  website text DEFAULT NULL,
-  approved bool NOT NULL DEFAULT FALSE,
-  payment_info_id int DEFAULT NULL,
-  event_description text NOT NULL,
-  poster varchar(100) DEFAULT NULL,
-  event_type_id int NOT NULL
+	event_id SERIAL NOT NULL PRIMARY KEY,
+	organize_id int NOT NULL,
+	event_name varchar(100) NOT NULL,
+	event_startdate timestamp NOT NULL,
+	event_enddate timestamp NOT NULL,
+	location varchar(200) NOT NULL,
+	email varchar(30) DEFAULT NULL,
+	tel varchar(10) DEFAULT NULL,
+	website text DEFAULT NULL,
+	approved bool NOT NULL DEFAULT FALSE,
+	payment_info_id int DEFAULT NULL,
+	event_description text NOT NULL,
+	poster varchar(700) DEFAULT NULL,
+	event_type_id int NOT NULL,
+	CONSTRAINT paymentInfo
+		FOREIGN KEY(payment_info_id) 
+			REFERENCES paymentinfo(payment_info_id) 
+			ON DELETE SET NULL 
+			ON UPDATE CASCADE
 );
 
 CREATE TABLE Categories(
@@ -42,18 +47,18 @@ CREATE TABLE Categories(
 );
 
 CREATE TABLE CategoriesView(
-	event_id int NOT NULL,
-	categories_id int NOT NULL,
-	CONSTRAINT fk_event
-		FOREIGN KEY(event_id)
-			REFERENCES event(event_id) 
-			ON DELETE CASCADE 
-			ON UPDATE CASCADE,
-	CONSTRAINT fk_categories
-		FOREIGN KEY(categories_id) 
-			REFERENCES categories(categories_id) 
-			ON DELETE CASCADE 
-			ON UPDATE CASCADE
+    event_id int NOT NULL,
+    categories_id int NOT NULL,
+    CONSTRAINT fk_event
+        FOREIGN KEY(event_id)
+            REFERENCES event(event_id) 
+            ON DELETE CASCADE 
+            ON UPDATE CASCADE,
+    CONSTRAINT fk_categories
+        FOREIGN KEY(categories_id) 
+            REFERENCES categories(categories_id) 
+            ON DELETE CASCADE 
+            ON UPDATE CASCADE
 );
 
 
@@ -62,7 +67,7 @@ CREATE TABLE Organize(
 	name varchar(100) NOT NULL,
 	tel varchar(10),
 	website text,
-	payment_info_id int NOT NULL,
+	payment_info_id int,
 	CONSTRAINT paymentInfo
 		FOREIGN KEY(payment_info_id) 
 			REFERENCES paymentinfo(payment_info_id) 
@@ -130,10 +135,10 @@ CREATE TABLE Booking(
 			ON DELETE CASCADE
 			ON UPDATE CASCADE,
 	CONSTRAINT fk_payment
-	FOREIGN KEY(payment_info_id)
-		REFERENCES paymentInfo(payment_info_id)
-		ON DELETE RESTRICT
-		ON UPDATE CASCADE,
+		FOREIGN KEY(payment_info_id)
+			REFERENCES paymentInfo(payment_info_id)
+			ON DELETE CASCADE
+			ON UPDATE CASCADE,
 	CONSTRAINT fk_event
 		FOREIGN KEY(event_id)
 			REFERENCES event(event_id)
