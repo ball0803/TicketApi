@@ -614,7 +614,7 @@ app.get("/get_available_seat", (req, res)=>{
             res.status(500).send('Failed to find seat type no')
             return;
         }
-        pool.query(`SELECT seat_type_id, seat_no FROM ETicket e JOIN Payment p ON e.booking_id=p.booking_id JOIN Booking b ON b.booking_id=p.booking_id WHERE b.event_id=${event_id}`, (err2, res2)=>{
+        pool.query(`SELECT seat_type_id, seat_no, isrefund FROM ETicket e JOIN Payment p ON e.booking_id=p.booking_id JOIN Booking b ON b.booking_id=p.booking_id WHERE b.event_id=${event_id}`, (err2, res2)=>{
             if(err2){
                 console.error('error executing query err2: ', err2)
                 res.status(500).send('Failed to find bougth seat no')
@@ -629,15 +629,17 @@ app.get("/get_available_seat", (req, res)=>{
                     seat_no[row.seat_type_id].push(`${row.seat_row}${i.toString().padStart(row.seat_end.toString().length, '0')}`)
                 }
             })
-            // console.log(seat_no, res1, res2)
+            console.log(seat_no, res1, res2)
             // let unavailable_seat = res2.rows.map((obj)=>obj.seat_no)
             let unavailable_seat = {}
             for(let i = 0; i<res2.rowCount; i++){
                 const seat = res2.rows[i]
-                if(!unavailable_seat[seat.seat_type_id]){
-                    unavailable_seat[seat.seat_type_id] = [];
+                if(!seat.isrefund){
+                    if(!unavailable_seat[seat.seat_type_id]){
+                        unavailable_seat[seat.seat_type_id] = [];
+                    }
+                    unavailable_seat[seat.seat_type_id].push(seat.seat_no)
                 }
-                unavailable_seat[seat.seat_type_id].push(seat.seat_no)
             }
             // console.log(seat_no, unavailable_seat)
             for(const key in unavailable_seat){
@@ -658,6 +660,27 @@ app.get("/get_available_seat", (req, res)=>{
             
         })
         
+    })
+})
+
+app.get("/get_seat", (req, res)=>{
+    const {event_id} = req.query
+    pool.query(`SELECT STN.seat_type_id, seat_row, seat_start, seat_end FROM SeatTypeNo STN JOIN SeatType ST ON STN.seat_type_id=ST.seat_type_id WHERE ST.event_id=${event_id}`, (err1, res1)=>{
+        if(err1){
+            console.error('error executing query err1: ', err1)
+            res.status(500).send('Failed to find seat type no')
+            return;
+        }
+            let seat_no = {}
+            res1.rows.forEach((row)=>{
+                if(!seat_no[row.seat_row]){
+                    seat_no[row.seat_row] = []
+                }
+                for(let i = row.seat_start; i<=row.seat_end; i++){
+                    seat_no[row.seat_row].push(`${row.seat_row}${i.toString().padStart(row.seat_end.toString().length, '0')}`)
+                }
+            })
+            res.status(200).send(Object.values(seat_no).sort())
     })
 })
 
@@ -694,7 +717,7 @@ app.post("/create_booking", (req, res)=>{
                 res.status(500).send('Failed to create booking ticket')
                 return;
             }
-            res.status(200).send("Succesfully create booking"+res1.rows[0].booking_id)
+            res.status(200).send({info: "Succesfully create booking", booking_id: res1.rows[0].booking_id})
             
         })
     })
@@ -703,7 +726,7 @@ app.post("/create_booking", (req, res)=>{
 
 app.get("/get_event", (req, res)=>{
     const {event_id, event_name, event_type_id, categories_id} = req.query
-    let query = "SELECT e.*, COUNT(*) AS follower FROM Event e LEFT JOIN FollowedEvent fe ON fe.event_id=e.event_id"
+    let query = "SELECT e.*, et.event_type, COUNT(*) AS follower FROM Event e LEFT JOIN FollowedEvent fe ON fe.event_id=e.event_id JOIN EventType et ON e.event_type_id=et.event_type_id"
     let value = []
     if(event_id !== undefined){
         value.push(`e.event_id=${event_id}`)
@@ -712,16 +735,16 @@ app.get("/get_event", (req, res)=>{
         value.push(`event_name LIKE '%${event_name}%'`)
     }
     if(event_type_id !== undefined){
-        value.push(`event_type_id=${event_type_id}`)
+        value.push(`e.event_type_id=${event_type_id}`)
     }
     if(categories_id !== undefined){
         query += ' JOIN CategoriesView cv ON e.event_id=cv.event_id'
         value.push(`categories_id IN (${JSON.parse(categories_id).join(', ')})`)
     }
     if(value.length !== 0){
-        query = query +" WHERE " + value.join(" AND ") + " GROUP BY e.event_id"
+        query = query +" WHERE " + value.join(" AND ") + " GROUP BY e.event_id, et.event_type"
     }else{
-        query = query + " GROUP BY e.event_id"
+        query = query + " GROUP BY e.event_id, et.event_type"
     }
 
     if(categories_id !== undefined){
@@ -789,11 +812,12 @@ app.get("/validate_voucher", (req, res)=>{
             res.status(500).send('Failed to find voucher')
             return;
         }
+        if(res1.rowCount === 0 || res1.rows[0].event_id.toString() !== event_id){
+            res.status(404).send({voucher_is_valid: false, info: 'Not found this voucher code'})
+            return;
+        }
         if(res1.rows[0].status){
             res.status(500).send({voucher_is_valid: false, info: 'This voucher already closed'})
-        }
-        if(res1.rowCount === 0 || res1.rows[0].event_id.toString() !== event_id){
-            res.status(500).send({voucher_is_valid: false, info: 'Not found this voucher code'})
             return;
         }
         if(res1.rows[0].expire_date <= formattedDate ){
@@ -804,7 +828,7 @@ app.get("/validate_voucher", (req, res)=>{
             res.status(500).send({voucher_is_valid: false, info: 'This voucher already reach the usage limit'})
             return;
         }
-        res.status(200).send({voucher_is_valid: true, info: 'Successfully find this voucher'})
+        res.status(200).send({voucher_is_valid: true, amount: res1.rows[0].amount, voucher_id: res1.rows[0].voucher_id, info: 'Successfully find this voucher'})
 
     })
 })
@@ -822,38 +846,60 @@ app.get("/event_voucher", (req, res)=>{
     })
 })
 // get user booking
-app.get("/user_booking", (req, res)=>{
-    const {user_id} = req.query
-    pool.query(`SELECT * FROM Booking WHERE user_id=${user_id};`, (err1, res1)=>{
-        if(err1){
-            console.error('error executing query err1: ', err1)
-            res.status(500).send('Failed to find voucher')
-            return;
-        }
-        if(res1.rowCount == 0){
-            res.status(200).send(res1.rows)
-        }else{
-            pool.query(`SELECT et.*, st.seat_type, st.price FROM ETicket et JOIN SeatType st ON et.seat_type_id=st.seat_type_id WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, (err2, res2)=>{ 
-                let booking_ticket = {}
-                res2.rows.forEach((row)=>{
-                    if(!booking_ticket[row.booking_id]){
-                        booking_ticket[row.booking_id] = []
-                    }
-                    booking_ticket[row.booking_id].push(row)
-                })
-                // console.log(booking_ticket, `SELECT * FROM ETicket WHERE booking_id IN (${res1.rows.map((item)=>item.booking_id).join(', ')});`, res2.rows)
-                res1.rows.map((row)=>{
-                    row.total_price = 0
-                    booking_ticket[row.booking_id].forEach((ticket)=>{
-                        row.total_price += parseFloat(ticket.price)
-                    })
-                    row.ticket = booking_ticket[row.booking_id] 
-                })
-                res.status(200).send(res1.rows)
-            })
-        }
-    })
-})
+app.get("/user_booking", (req, res) => {
+  const { user_id } = req.query;
+
+  pool.query(`SELECT b.* FROM Booking b LEFT JOIN Payment p ON b.booking_id=p.booking_id  WHERE user_id=${user_id} AND p.booking_id IS NULL;`, (err1, res1) => {
+    if (err1) {
+      console.error('error executing query err1: ', err1);
+      res.status(500).send('Failed to find voucher');
+      return;
+    }
+
+    if (res1.rowCount == 0) {
+      res.status(200).send(res1.rows);
+    } else {
+      pool.query(`SELECT et.*, st.seat_type, st.price FROM ETicket et JOIN SeatType st ON et.seat_type_id=st.seat_type_id WHERE booking_id IN (${res1.rows.map((item) => item.booking_id).join(', ')});`, (err2, res2) => {
+        let booking_ticket = {};
+        res2.rows.forEach((row) => {
+          if (!booking_ticket[row.booking_id]) {
+            booking_ticket[row.booking_id] = [];
+          }
+          booking_ticket[row.booking_id].push(row);
+        });
+
+        Promise.all(res1.rows.map(async (row) => {
+          row.total_price = 0;
+          booking_ticket[row.booking_id].forEach((ticket) => {
+            row.total_price += parseFloat(ticket.price) * 1.07;
+            if (ticket.refundable) {
+              row.total_price += parseFloat(ticket.price) * 1.07 * 0.3;
+            }
+          });
+
+          if (row.voucher_id != null) {
+            const voucherQuery = `SELECT amount FROM Voucher WHERE voucher_id=${row.voucher_id};`;
+            const voucherResult = await pool.query(voucherQuery);
+            if (voucherResult.rowCount != 0) {
+              const voucherAmount = parseFloat(voucherResult.rows[0].amount);
+              row.total_price -= voucherAmount;
+            }
+          }
+
+          row.ticket = booking_ticket[row.booking_id];
+          return row;
+        }))
+          .then((updatedRows) => {
+            res.status(200).send(updatedRows);
+          })
+          .catch((error) => {
+            console.error('Error executing queries: ', error);
+            res.status(500).send('Failed to retrieve booking information');
+          });
+      });
+    }
+  });
+});
 
 // get event type name
 app.get("/event_type_name", (req, res)=>{
